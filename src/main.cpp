@@ -1,92 +1,105 @@
+#if __APPLE__
+#include <OpenGL/gl.h>
+#include <OpenGL/glu.h>
+#include <GLUT/glut.h>
+#else
+#include <GL/gl.h>
+#include <GL/glu.h>
+#include <GL/glut.h>
+#endif
+
 #include <iostream>
 #include <vector>
-#include <cstdlib>
-#include <cmath>
-#include <GLUT/glut.h>
+#include <math.h>
 using namespace std;
 
-//////////////////////////////////////////
-// A simple two dimensional vector class
-struct Vec2 {
-    float x,y;
-    Vec2() :x(0),y(0) { }
-    Vec2(float a, float b) : x(a), y(b) { }
-    Vec2 operator+(const Vec2& b) const { return Vec2(x+b.x, y+b.y); }
-    Vec2 operator-(const Vec2& b) const { return Vec2(x-b.x, y-b.y); }
-    Vec2 & operator=(const Vec2& b) { x=b.x; y=b.y; return *this; }
-    Vec2 & operator+=(const Vec2& b) { return *this = *this + b; }
-    Vec2 & operator-=(const Vec2& b) { return *this = *this - b; }
-    
-    float operator*(const Vec2& b) const { return x*b.x + y*b.y; }
-    Vec2 operator*(float b) const { return Vec2(x * b, y * b); }
-    Vec2 operator/(float b) const { return Vec2(x / b, y / b); }
-    float len2() const { return *this * *this; }
-    float len() const { return sqrt(len2()); }
-    Vec2 normal() const { return *this / len(); }
+#include <eigen3/Eigen/Dense>
+using namespace Eigen;
+
+// neighbor data structure
+struct Neighbor { 
+	int i, j; 
+	float q, q2;
 };
-Vec2 operator*(float b, const Vec2& a) { return Vec2(a.x * b, a.y * b); }
 
-//////////////////////////////////////////
-// A structure for holding two neighboring particles and their weighted distances
-struct neighbor { int i, j; float q, q2; };
-
-// The particle structure holding all of the relevant information.
-struct particle {
-	Vec2 pos, pos_old, vel, force;
+// particle data structure
+struct Particle {
+	Vector2d pos, pos_old, vel, force;
 	float mass, rho, rho_near, press, press_near, sigma, beta;
-	vector<neighbor> neighbors;
+	vector<Neighbor> neighbors;
 };
-//////////////////////////////////////////
-int window_w=512, window_h=512;				// Initial Size of the Window
-int N = 1000;										// Number of Particles in the simulation
 
-float G = .02f * .25f;						// Gravitational Constant for our simulation
+// solver parameters
+const static float G = .02f * .25f; // gravitational constant
+const static float spacing = 2.f; // particle spacing/radius
+const static float k = spacing / 1000.f; // far pressure weight
+const static float k_near = k*10.f; // near pressure weight
+const static float rest_density = 3.f;	// rest density
+const static float r = spacing*1.25f; // kernel radius
+const static float rsq = r*r;
 
-float spacing = 2.f;							// Spacing of particles
-float k = spacing / 1000.0f;			   // Far pressure weight
-float k_near = k*10;							// Near pressure weight
-float rest_density = 3;						// Rest Density
-float r=spacing*1.25f;						// Radius of Support
-float rsq=r*r;									// ... squared for performance stuff
+// solver data
+const static int MAX_PARTICLES = 1000;
+static vector<Particle> particles;
 
-float SIM_W=50;								// The size of the world
-float bottom = 0;								// The floor of the world
+// rendering projection parameters
+const static int WINDOW_WIDTH = 1280;
+const static int WINDOW_HEIGHT = 800;
+const static double VIEW_WIDTH = 100.0f;
+const static double VIEW_HEIGHT = WINDOW_HEIGHT*VIEW_WIDTH/WINDOW_WIDTH;
 
-// Our collection of particles
-vector<particle> particles;
-
-// Mouse attractor
-Vec2 attractor(999,999);
-bool attracting = false;
-
-//////////////////////////////////////////
-// Some utility stuff.
-// Between [0,1]
+// LVSTODO: cleanup these...
 float rand01() { return (float)rand() * (1.f / RAND_MAX); }
-// Between [a,b]
 float randab(float a, float b) { return a + (b-a)*rand01(); }
-//////////////////////////////////////////
 
-void render()
+void InitSPH(void)
 {
-	glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+	// Initialize particles
+	// We will make a block of particles with a total width of 1/4 of the screen.
+    float w = VIEW_WIDTH/2;
+    for(float y=0.0f+1; y <= VIEW_HEIGHT; y+=r*.5f)
+        for(float x=0.0; x <= w; x+=r*.5f)
+        {
+            if(particles.size() > MAX_PARTICLES) 
+            	break;
+            
+            Particle p;
+            p.pos = Vector2d(x, y);
+            //p.pos_old = p.pos + 0.001f * Vector2d(rand01(), rand01());
+            p.pos_old = p.pos;
+            p.force = Vector2d(0,0);
+            p.sigma = .2f;
+            p.beta = 0.2f;
+            particles.push_back(p);
+        }
+}
+
+void InitGL(void)
+{
+	glClearColor(0.9f,0.9f,0.9f,1);
+	glEnable(GL_POINT_SMOOTH);
+	glPointSize(1.0f*WINDOW_WIDTH/VIEW_WIDTH);
+	glMatrixMode(GL_PROJECTION);
+}
+
+void Render(void)
+{
+	glClear(GL_COLOR_BUFFER_BIT);
+	
 	glLoadIdentity();
-    
-	// Draw Fluid Particles
-	glPointSize(r*2);
+	glOrtho(0, VIEW_WIDTH, 0, VIEW_HEIGHT, 0, 1);
+
+
+	glColor4f(0.2f, 0.6f, 1.0f, 1);
 	glBegin(GL_POINTS);
-	for(int i=0; i < particles.size(); ++i)
-	{
-        glColor3f(.2f,.3f,.7f);
-		glVertex2f(particles[i].pos.x, particles[i].pos.y);
-	}
+	for(auto &p : particles)
+		glVertex2f(p.pos(0), p.pos(1));
 	glEnd();
-    
+
 	glutSwapBuffers();
 }
-bool asd = false;
-//////////////////////////////////////////
-void idle()
+
+void Update(void)
 {
 	// UPDATE
 	//
@@ -104,7 +117,7 @@ void idle()
 		particles[i].pos += particles[i].force;
         
 		// Restart the forces with gravity only. We'll add the rest later.
-		particles[i].force = Vec2(0,-G);
+		particles[i].force = Vector2d(0,-G);
         
 		// Calculate the velocity for later.
 		particles[i].vel = particles[i].pos - particles[i].pos_old;
@@ -113,25 +126,19 @@ void idle()
 		// This will not damp all motion. It's not physically-based at all. Just
 		// a little bit of a hack.
 		float max_vel = 2.f;
-		float vel_mag = particles[i].vel.len2();
+		float vel_mag = particles[i].vel.squaredNorm();
 		// If the velocity is greater than the max velocity, then cut it in half.
 		if(vel_mag > max_vel*max_vel)
 			particles[i].vel = particles[i].vel * .5f;
         
 		// If the particle is outside the bounds of the world, then
 		// Make a little spring force to push it back in.
-		if(particles[i].pos.x < -SIM_W) particles[i].force.x -= (particles[i].pos.x - -SIM_W) / 8;
-		if(particles[i].pos.x >  SIM_W) particles[i].force.x -= (particles[i].pos.x - SIM_W) / 8;
-		if(particles[i].pos.y < bottom) particles[i].force.y -= (particles[i].pos.y - bottom) / 8;
-		if(particles[i].pos.y > SIM_W*2)particles[i].force.y -= (particles[i].pos.y - SIM_W*2) / 8;
+		float eps = 1.0f;
+		if(particles[i].pos(0)-eps < 0.0f) particles[i].force(0) -= (particles[i].pos(0)-eps - 0.0f) / 8;
+		if(particles[i].pos(0)+eps >  VIEW_WIDTH) particles[i].force(0) -= (particles[i].pos(0)+eps - VIEW_WIDTH) / 8;
+		if(particles[i].pos(1)-eps < 0.0f) particles[i].force(1) -= (particles[i].pos(1)-eps - 0.0f) / 8;
+		if(particles[i].pos(1)+eps > VIEW_HEIGHT)particles[i].force(1) -= (particles[i].pos(1)+eps - VIEW_HEIGHT) / 8;
         
-		// Handle the mouse attractor.
-		// It's a simple spring based attraction to where the mouse is.
-		float attr_dist2 = (particles[i].pos - attractor).len2();
-		const float attr_l = SIM_W/4;
-		if( attracting )
-			if( attr_dist2 < attr_l*attr_l )
-				particles[i].force -= (particles[i].pos - attractor) / 256;
         
 		// Reset the nessecary items.
 		particles[i].rho = particles[i].rho_near = 0;
@@ -156,10 +163,10 @@ void idle()
 		for(int j = i + 1; j < particles_size; ++j)
 		{
 			// The vector seperating the two particles
-			Vec2 rij = particles[j].pos - particles[i].pos;
+			Vector2d rij = particles[j].pos - particles[i].pos;
             
 			// Along with the squared distance between
-			float rij_len2 = rij.len2();
+			float rij_len2 = rij.squaredNorm();
             
 			// If they're within the radius of support ...
 			if(rij_len2 < rsq)
@@ -180,7 +187,7 @@ void idle()
 				particles[j].rho_near += q3;
                 
 				// Set up the neighbor list for faster access later.
-				neighbor n;
+				Neighbor n;
 				n.i = i; n.j = j;
 				n.q = q; n.q2 = q2;
 				particles[i].neighbors.push_back(n);
@@ -208,26 +215,26 @@ void idle()
 	// For each particle ...
 	for(int i=0; i < particles.size(); ++i)
 	{
-		Vec2 dX = Vec2();
+		Vector2d dX = Vector2d(0,0);
         
 		// For each of the neighbors
 		unsigned long ncount = particles[i].neighbors.size();
 		for(int ni=0; ni < ncount; ++ni)
 		{
-			neighbor n = particles[i].neighbors[ni];
+			Neighbor n = particles[i].neighbors[ni];
 			int j = n.j;
 			float q(n.q);
 			float q2(n.q2);
             
 			// The vector from particle i to particle j
-			Vec2 rij = particles[j].pos - particles[i].pos;
+			Vector2d rij = particles[j].pos - particles[i].pos;
             
 			// calculate the force from the pressures calculated above
 			float dm = (particles[i].press + particles[j].press) * q +
             (particles[i].press_near + particles[j].press_near) * q2;
             
 			// Get the direction of the force
-			Vec2 D = rij.normal() * dm;
+			Vector2d D = rij.normalized() * dm;
 			dX += D;
 			particles[j].force += D;
 		}
@@ -248,20 +255,20 @@ void idle()
 		// For each of that particles neighbors
 		for(int ni=0; ni < particles[i].neighbors.size(); ++ni)
 		{
-			neighbor n = particles[i].neighbors[ni];
+			Neighbor n = particles[i].neighbors[ni];
             
-			Vec2 rij = particles[n.j].pos - particles[i].pos;
-			float l = (rij).len();
+			Vector2d rij = particles[n.j].pos - particles[i].pos;
+			float l = (rij).norm();
 			float q = l / r;
             
-			Vec2 rijn = (rij / l);
+			Vector2d rijn = (rij / l);
 			// Get the projection of the velocities onto the vector between them.
-			float u = (particles[n.i].vel - particles[n.j].vel) * rijn;
+			float u = (particles[n.i].vel - particles[n.j].vel).dot(rijn);
 			if(u > 0)
 			{
 				// Calculate the viscosity impulse between the two particles
 				// based on the quadratic function of projected length.
-				Vec2 I = (1 - q) * (particles[n.j].sigma * u + particles[n.j].beta * u*u) * rijn;
+				Vector2d I = (1 - q) * (particles[n.j].sigma * u + particles[n.j].beta * u*u) * rijn;
                 
 				// Apply the impulses on the two particles
 				particles[n.i].vel -= I * 0.5f;
@@ -270,106 +277,46 @@ void idle()
             
 		}
 	}
-    
-	// Draw the scene
-	render();
+
+	glutPostRedisplay();
 }
 
-//////////////////////////////////////////
-void keyboard(unsigned char c, __attribute__((unused)) int x, __attribute__((unused))  int y)
+void Keyboard(unsigned char c, __attribute__((unused)) int x, __attribute__((unused)) int y)
 {
-    float radius = SIM_W/8;
+	float radius = VIEW_WIDTH/8;
     
 	switch(c)
 	{
-            // Quit
-		case 27:
-		case 'q':
-		case 'Q':
-			exit(0);
-			break;
-            
-            // If we press the space key, add some particles.
-        case ' ':
-            for(float y=SIM_W*2 - radius; y <= SIM_W*2+radius; y+=r*.5f){
-                for(float x=-radius; x <= radius; x+=r*.5f)
-                {
-                    particle p;
-                    p.pos = p.pos_old = Vec2(x , y) + Vec2(rand01(), rand01());
-                    p.force = Vec2(0,0);
-                    
-                    if( (p.pos - Vec2( 0, SIM_W*2 ) ).len2() < radius*radius )
-                        particles.push_back(p);
-                }
-			}
-			break;
+	case ' ':
+        float w = VIEW_WIDTH/4;
+	    for(float y=VIEW_HEIGHT/2+1; y <= VIEW_HEIGHT; y+=r*.5f)
+	        for(float x=0.0+1.0; x <= w; x+=r*.5f)
+	        {
+	            Particle p;
+	            p.pos = Vector2d(x, y);
+	            //p.pos_old = p.pos + 0.001f * Vector2d(rand01(), rand01());
+	            p.pos_old = p.pos;
+	            p.force = Vector2d(0,0);
+	            p.sigma = .2f;
+	            p.beta = 0.2f;
+	            particles.push_back(p);
+	        }
+		break;
 	}
 }
 
-void motion(int x, int y)
+int main(int argc, char** argv)
 {
-	// This simply updates the location of the mouse attractor.
-	float relx = (float)(x - window_w/2) / window_w;
-	float rely = -(float)(y - window_h) / window_h;
-	Vec2 mouse = Vec2(relx*SIM_W*2, rely*SIM_W*2);
-	attractor = mouse;
-}
-
-void mouse(__attribute__((unused)) int button, int state, __attribute__((unused))  int x, __attribute__((unused))  int y)
-{
-	if(state == GLUT_DOWN) attracting = true;
-	else
-	{
-		attracting = false;
-		attractor = Vec2(SIM_W * 99, SIM_W * 99);
-	}
-}
-
-//////////////////////////////////////////
-void init()
-{
-	// create a world with dimensions x:[-SIM_W,SIM_W] and y:[0,SIM_W*2]
-	glMatrixMode(GL_PROJECTION);
-	glLoadIdentity();
-	gluOrtho2D(-SIM_W,SIM_W,0,2*SIM_W);
-	glMatrixMode(GL_MODELVIEW);
-	glLoadIdentity();
-    
-	glPointSize(5.f);
-    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-    
-	// Initialize particles
-	// We will make a block of particles with a total width of 1/4 of the screen.
-    float w = SIM_W/2;
-    for(float y=bottom+1; y <= 10000; y+=r*.5f)
-        for(float x=-w; x <= w; x+=r*.5f)
-        {
-            if(particles.size() > N) break;
-            
-            particle p;
-            p.pos = Vec2(x, y);
-            p.pos_old = p.pos + 0.001f * Vec2(rand01(), rand01());
-            p.force = Vec2(0,0);
-            p.sigma = .2f;
-            p.beta = 0.2f;
-            particles.push_back(p);
-        }
-}
-
-//////////////////////////////////////////
-int main(int argc, char **argv)
-{
+	glutInitWindowSize(WINDOW_WIDTH,WINDOW_HEIGHT);
 	glutInit(&argc, argv);
-	glutInitDisplayMode(GLUT_RGBA|GLUT_DOUBLE);
-	glutInitWindowSize(window_w, window_h);
 	glutCreateWindow("SPH");
-    
-	glutDisplayFunc(render);
-	glutKeyboardFunc(keyboard);
-	glutIdleFunc(idle);
-	glutMotionFunc(motion);
-	glutMouseFunc(mouse);
-    
-	init();
+	glutDisplayFunc(Render);
+	glutIdleFunc(Update);
+	glutKeyboardFunc(Keyboard);
+
+	InitGL();
+	InitSPH();
+
 	glutMainLoop();
+	return 0;
 }

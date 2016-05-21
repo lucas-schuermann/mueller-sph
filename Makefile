@@ -1,9 +1,14 @@
 #######################################################################################################
 
 # Mac OS X
-INCLUDE_PATH      = -I/usr/local/include/ -I/opt/local/include/
-LIBRARY_PATH      = -L/usr/local/lib/ -L/opt/local/lib/
+INCLUDE_PATH      = -I/usr/local/include/ -I/usr/local/include/eigen3/
+LIBRARY_PATH      = -L/usr/local/lib/
 OPENGL_LIBS       = -framework OpenGL -framework GLUT
+
+# # Linux
+#INCLUDE_PATH      =
+#LIBRARY_PATH      =
+#OPENGL_LIBS       = -lglut -lGL -lGLU -lX11
 
 # # Windows / Cygwin
 # INCLUDE_PATH      = -I/usr/include/opengl
