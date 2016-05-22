@@ -16,30 +16,42 @@ using namespace std;
 #include <eigen3/Eigen/Dense>
 using namespace Eigen;
 
-// neighbor data structure
-struct Neighbor { 
-	int i, j; 
-	float q, q2;
-};
-
-// particle data structure
-struct Particle {
-	Vector2d pos, pos_old, vel, force;
-	float mass, rho, rho_near, press, press_near, sigma, beta;
-	vector<Neighbor> neighbors;
-};
-
 // solver parameters
-const static float G = .02f * .25f; // gravitational constant
+const static Vector2d G(0.f, -.02f * .25f); // external (gravitational) forces
 const static float spacing = 2.f; // particle spacing/radius
 const static float k = spacing / 1000.f; // far pressure weight
 const static float k_near = k*10.f; // near pressure weight
 const static float rest_density = 3.f;	// rest density
 const static float r = spacing*1.25f; // kernel radius
-const static float rsq = r*r;
+const static float rsq = r*r; // radius^2 for optimization
+const static float eps = 1.0f; // boundary epsilon
+
+const static float SIGMA = 0.2f; // visc parameters
+const static float BETA = 0.2;
+
+const static float SPRING_CONST = 1./8;
+
+// neighbor data structure
+// stores index of neighbor particles along with dist and squared dist to particle
+struct Neighbor { 
+	int j;
+	float q, q2;
+};
+
+// particle data structure
+// stores position, old position, velocty, and force for verlet integration
+// stores mass, rho, rho_near, pressure, pressure_near, sigma, and beta values for SPH
+// stores list of neighboring particles for quick access in multiple simulation steps
+struct Particle {
+	Particle(float _x, float _y) : x(_x,_y), x0(_x,_y), sigma(SIGMA), beta(BETA) {}
+	Particle() {}
+	Vector2d x, x0, v, f;
+	float mass, rho, rho_near, press, press_near, sigma, beta;
+	vector<Neighbor> neighbors;
+};
 
 // solver data
-const static int MAX_PARTICLES = 1000;
+const static int MAX_PARTICLES = 2500;
 static vector<Particle> particles;
 
 // rendering projection parameters
@@ -54,24 +66,9 @@ float randab(float a, float b) { return a + (b-a)*rand01(); }
 
 void InitSPH(void)
 {
-	// Initialize particles
-	// We will make a block of particles with a total width of 1/4 of the screen.
-    float w = VIEW_WIDTH/2;
-    for(float y=0.0f+1; y <= VIEW_HEIGHT; y+=r*.5f)
-        for(float x=0.0; x <= w; x+=r*.5f)
-        {
-            if(particles.size() > MAX_PARTICLES) 
-            	break;
-            
-            Particle p;
-            p.pos = Vector2d(x, y);
-            //p.pos_old = p.pos + 0.001f * Vector2d(rand01(), rand01());
-            p.pos_old = p.pos;
-            p.force = Vector2d(0,0);
-            p.sigma = .2f;
-            p.beta = 0.2f;
-            particles.push_back(p);
-        }
+	for(float y = eps; y < VIEW_HEIGHT-eps; y += r*0.5f)
+		for(float x = eps; x <= VIEW_WIDTH/2; x += r*0.5f)
+			particles.push_back(Particle(x,y));
 }
 
 void InitGL(void)
@@ -106,21 +103,46 @@ void Update(void)
 	// This modified verlet integrator has dt = 1 and calculates the velocity
 	// For later use in the simulation.
     
+	// verlet integration
+	// with spring boundary handling and sanity check
+	for(auto &p : particles)
+	{
+		// for simplicity, dt=1 assumed in integration
+		p.x0 = p.x;
+		p.x += p.v;
+		p.x += p.f;
+
+		// apply external forces
+		p.f = G;
+		p.v = p.x - p.x0;
+
+		// enforce boundary condition
+		if(p.x(0)-eps < 0.0f)
+			p.f(0) -= (p.x(0)-eps) * SPRING_CONST;
+		if(p.x(0)+eps > VIEW_WIDTH) 
+			p.f(0) -= (p.x(0)+eps - VIEW_WIDTH) * SPRING_CONST;
+		if(p.x(1)-eps < 0.0f)
+			p.f(1) -= (p.x(1)-eps) * SPRING_CONST;
+		if(p.x(1)+eps > VIEW_HEIGHT)
+			p.f(1) -= (p.x(1)+eps - VIEW_HEIGHT) * SPRING_CONST;
+	}
+
+	/*
 	// For each particles i ...
     for(int i=0; i < particles.size(); ++i)
 	{
 		// Normal verlet stuff
-		particles[i].pos_old = particles[i].pos;
-		particles[i].pos += particles[i].vel;
+		p.x_old = p.x;
+		p.x += particles[i].vel;
         
 		// Apply the currently accumulated forces
-		particles[i].pos += particles[i].force;
+		p.x += p.f;
         
 		// Restart the forces with gravity only. We'll add the rest later.
-		particles[i].force = Vector2d(0,-G);
+		p.f = G;
         
 		// Calculate the velocity for later.
-		particles[i].vel = particles[i].pos - particles[i].pos_old;
+		particles[i].vel = p.x - p.x_old;
         
 		// If the velocity is really high, we're going to cheat and cap it.
 		// This will not damp all motion. It's not physically-based at all. Just
@@ -133,17 +155,17 @@ void Update(void)
         
 		// If the particle is outside the bounds of the world, then
 		// Make a little spring force to push it back in.
-		float eps = 1.0f;
-		if(particles[i].pos(0)-eps < 0.0f) particles[i].force(0) -= (particles[i].pos(0)-eps - 0.0f) / 8;
-		if(particles[i].pos(0)+eps >  VIEW_WIDTH) particles[i].force(0) -= (particles[i].pos(0)+eps - VIEW_WIDTH) / 8;
-		if(particles[i].pos(1)-eps < 0.0f) particles[i].force(1) -= (particles[i].pos(1)-eps - 0.0f) / 8;
-		if(particles[i].pos(1)+eps > VIEW_HEIGHT)particles[i].force(1) -= (particles[i].pos(1)+eps - VIEW_HEIGHT) / 8;
+		if(p.x(0)-eps < 0.0f) p.f(0) -= (p.x(0)-eps - 0.0f) / 8;
+		if(p.x(0)+eps >  VIEW_WIDTH) p.f(0) -= (p.x(0)+eps - VIEW_WIDTH) / 8;
+		if(p.x(1)-eps < 0.0f) p.f(1) -= (p.x(1)-eps - 0.0f) / 8;
+		if(p.x(1)+eps > VIEW_HEIGHT)p.f(1) -= (p.x(1)+eps - VIEW_HEIGHT) / 8;
         
         
 		// Reset the nessecary items.
 		particles[i].rho = particles[i].rho_near = 0;
 		particles[i].neighbors.clear();
 	}
+	*/
     
 	// DENSITY
 	//
@@ -159,11 +181,12 @@ void Update(void)
 		float d=0, dn=0;
         
 		// Now look at every other particle
+		particles[i].neighbors.clear();
         unsigned long particles_size = particles.size();
 		for(int j = i + 1; j < particles_size; ++j)
 		{
 			// The vector seperating the two particles
-			Vector2d rij = particles[j].pos - particles[i].pos;
+			Vector2d rij = particles[j].pos - p.x;
             
 			// Along with the squared distance between
 			float rij_len2 = rij.squaredNorm();
@@ -188,7 +211,7 @@ void Update(void)
                 
 				// Set up the neighbor list for faster access later.
 				Neighbor n;
-				n.i = i; n.j = j;
+				n.j = j;
 				n.q = q; n.q2 = q2;
 				particles[i].neighbors.push_back(n);
 			}
@@ -227,7 +250,7 @@ void Update(void)
 			float q2(n.q2);
             
 			// The vector from particle i to particle j
-			Vector2d rij = particles[j].pos - particles[i].pos;
+			Vector2d rij = particles[j].pos - p.x;
             
 			// calculate the force from the pressures calculated above
 			float dm = (particles[i].press + particles[j].press) * q +
@@ -239,7 +262,7 @@ void Update(void)
 			particles[j].force += D;
 		}
         
-		particles[i].force -= dX;
+		p.f -= dX;
 	}
     
 	// VISCOSITY
@@ -257,13 +280,13 @@ void Update(void)
 		{
 			Neighbor n = particles[i].neighbors[ni];
             
-			Vector2d rij = particles[n.j].pos - particles[i].pos;
+			Vector2d rij = particles[n.j].pos - p.x;
 			float l = (rij).norm();
 			float q = l / r;
             
 			Vector2d rijn = (rij / l);
 			// Get the projection of the velocities onto the vector between them.
-			float u = (particles[n.i].vel - particles[n.j].vel).dot(rijn);
+			float u = (particles[i].vel - particles[n.j].vel).dot(rijn);
 			if(u > 0)
 			{
 				// Calculate the viscosity impulse between the two particles
@@ -271,7 +294,7 @@ void Update(void)
 				Vector2d I = (1 - q) * (particles[n.j].sigma * u + particles[n.j].beta * u*u) * rijn;
                 
 				// Apply the impulses on the two particles
-				particles[n.i].vel -= I * 0.5f;
+				particles[i].vel -= I * 0.5f;
 				particles[n.j].vel += I * 0.5f;
 			}
             
@@ -282,26 +305,15 @@ void Update(void)
 }
 
 void Keyboard(unsigned char c, __attribute__((unused)) int x, __attribute__((unused)) int y)
-{
-	float radius = VIEW_WIDTH/8;
-    
+{   
 	switch(c)
 	{
 	case ' ':
-        float w = VIEW_WIDTH/4;
-	    for(float y=VIEW_HEIGHT/2+1; y <= VIEW_HEIGHT; y+=r*.5f)
-	        for(float x=0.0+1.0; x <= w; x+=r*.5f)
-	        {
-	            Particle p;
-	            p.pos = Vector2d(x, y);
-	            //p.pos_old = p.pos + 0.001f * Vector2d(rand01(), rand01());
-	            p.pos_old = p.pos;
-	            p.force = Vector2d(0,0);
-	            p.sigma = .2f;
-	            p.beta = 0.2f;
-	            particles.push_back(p);
-	        }
-		break;
+		if(particles.size() >= MAX_PARTICLES)
+	        break;
+		for(float y = VIEW_HEIGHT/2; y < VIEW_HEIGHT-eps; y += r*0.5f)
+			for(float x = eps; x <= VIEW_WIDTH/4; x += r*0.5f)
+				particles.push_back(Particle(x,y));
 	}
 }
 
@@ -309,7 +321,7 @@ int main(int argc, char** argv)
 {
 	glutInitWindowSize(WINDOW_WIDTH,WINDOW_HEIGHT);
 	glutInit(&argc, argv);
-	glutCreateWindow("SPH");
+	glutCreateWindow("Basic SPH");
 	glutDisplayFunc(Render);
 	glutIdleFunc(Update);
 	glutKeyboardFunc(Keyboard);
