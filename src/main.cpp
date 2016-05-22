@@ -1,21 +1,17 @@
 #if __APPLE__
-#include <OpenGL/gl.h>
-#include <OpenGL/glu.h>
 #include <GLUT/glut.h>
 #else
-#include <GL/gl.h>
-#include <GL/glu.h>
 #include <GL/glut.h>
 #endif
 
 #include <iostream>
 #include <vector>
-#include <math.h>
 using namespace std;
 
 #include <eigen3/Eigen/Dense>
 using namespace Eigen;
 
+// "Particle-based Viscoelastic Fluid Simluation"
 // solver parameters
 const static Vector2d G(0.f, -.02f * .25f); // external (gravitational) forces
 const static float spacing = 2.f; // particle spacing/radius
@@ -25,10 +21,10 @@ const static float rest_density = 3.f;	// rest density
 const static float r = spacing*1.25f; // kernel radius
 const static float rsq = r*r; // radius^2 for optimization
 const static float SIGMA = 0.2f; // visc parameters
-const static float BETA = 0.2;
+const static float BETA = 0.2f;
 
 // simulation parameters
-const static float eps = 1.0f; // boundary epsilon
+const static float EPS = 1.0f; // boundary epsilon
 const static float SPRING_CONST = 1./8.;
 const static float MAX_VEL = 2.f; // velocity limit for stability
 const static float MAX_VEL_SQ = MAX_VEL*MAX_VEL;
@@ -45,27 +41,26 @@ struct Neighbor {
 // stores mass, rho, rho_near, pressure, pressure_near, sigma, and beta values for SPH
 // stores list of neighboring particles for quick access in multiple simulation steps
 struct Particle {
-	Particle(float _x, float _y) : x(_x,_y), x0(_x,_y), sigma(SIGMA), beta(BETA) {}
-	Particle() {}
+	Particle(float _x, float _y) : x(_x,_y), x0(_x,_y), v(0.f,0.f), f(0.f,0.f), rho(0.f), rho_near(0.f), p(0.f), p_near(0.f) {}
 	Vector2d x, x0, v, f;
-	float mass, rho, rho_near, p, p_near, sigma, beta;
+	float mass, rho, rho_near, p, p_near;
 	vector<Neighbor> neighbors;
 };
 
 // solver data
-const static int MAX_PARTICLES = 2500;
+const static int MAX_PARTICLES = 1000;
 static vector<Particle> particles;
 
 // rendering projection parameters
 const static int WINDOW_WIDTH = 1280;
 const static int WINDOW_HEIGHT = 800;
-const static double VIEW_WIDTH = 100.0f;
+const static double VIEW_WIDTH = 50.0f;
 const static double VIEW_HEIGHT = WINDOW_HEIGHT*VIEW_WIDTH/WINDOW_WIDTH;
 
 void InitSPH(void)
 {
-	for(float y = eps; y < VIEW_HEIGHT-eps; y += r*0.5f)
-		for(float x = eps; x <= VIEW_WIDTH/2; x += r*0.5f)
+	for(float y = EPS; y < VIEW_HEIGHT-EPS; y += r*0.5f)
+		for(float x = EPS; x <= VIEW_WIDTH/2; x += r*0.5f)
 			particles.push_back(Particle(x,y));
 }
 
@@ -114,14 +109,14 @@ void Integrate(void)
 			p.v = p.v * .5f;
 
 		// enforce boundary condition
-		if(p.x(0)-eps < 0.0f)
-			p.f(0) -= (p.x(0)-eps) * SPRING_CONST;
-		if(p.x(0)+eps > VIEW_WIDTH) 
-			p.f(0) -= (p.x(0)+eps - VIEW_WIDTH) * SPRING_CONST;
-		if(p.x(1)-eps < 0.0f)
-			p.f(1) -= (p.x(1)-eps) * SPRING_CONST;
-		if(p.x(1)+eps > VIEW_HEIGHT)
-			p.f(1) -= (p.x(1)+eps - VIEW_HEIGHT) * SPRING_CONST;
+		if(p.x(0)-EPS < 0.0f)
+			p.f(0) -= (p.x(0)-EPS) * SPRING_CONST;
+		if(p.x(0)+EPS > VIEW_WIDTH) 
+			p.f(0) -= (p.x(0)+EPS - VIEW_WIDTH) * SPRING_CONST;
+		if(p.x(1)-EPS < 0.0f)
+			p.f(1) -= (p.x(1)-EPS) * SPRING_CONST;
+		if(p.x(1)+EPS > VIEW_HEIGHT)
+			p.f(1) -= (p.x(1)+EPS - VIEW_HEIGHT) * SPRING_CONST;
 	}
 }
 
@@ -216,7 +211,7 @@ void PressureAndViscosity(void)
 			{
 				// Calculate the viscosity impulse between the two particles
 				// based on the quadratic function of projected length.
-				Vector2d I = (1.f - q) * (pj.sigma * u + pj.beta * u*u) * rijn;
+				Vector2d I = (1.f - q) * (SIGMA * u + BETA * u*u) * rijn;
                 
 				// Apply the impulses on the two particles
 				pi.v -= I * 0.5f;
@@ -241,14 +236,12 @@ void Keyboard(unsigned char c, __attribute__((unused)) int x, __attribute__((unu
 	switch(c)
 	{
 	case ' ':
-	/*
-		// LVSTODO: something reasonable...
 		if(particles.size() >= MAX_PARTICLES)
-	    ;//    break;
-		for(float y = VIEW_HEIGHT/2; y < VIEW_HEIGHT-eps; y += r*0.5f)
-			for(float x = VIEW_WIDTH/2-VIEW_WIDTH/4; x <= VIEW_WIDTH/2+VIEW_WIDTH/4; x += r*0.5f)
-				particles.push_back(Particle(x,y));
-	*/
+			std::cout << "maximum number of particles reached" << std::endl;
+		else
+			for(float y = VIEW_HEIGHT/1.5f-VIEW_HEIGHT/5.f; y < VIEW_HEIGHT/1.5f+VIEW_HEIGHT/5.f; y += r*0.5f)
+				for(float x = VIEW_WIDTH/2.f-VIEW_HEIGHT/5.f; x <= VIEW_WIDTH/2.f+VIEW_HEIGHT/5.f; x += r*0.5f)
+					particles.push_back(Particle(x,y));
 		break;
 	}
 }
