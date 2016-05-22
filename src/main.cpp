@@ -27,6 +27,7 @@ const static float rsq = r*r; // radius^2 for optimization
 const static float SIGMA = 0.2f; // visc parameters
 const static float BETA = 0.2;
 
+// simulation parameters
 const static float eps = 1.0f; // boundary epsilon
 const static float SPRING_CONST = 1./8.;
 const static float MAX_VEL = 2.f; // velocity limit for stability
@@ -40,14 +41,14 @@ struct Neighbor {
 };
 
 // particle data structure
-// stores position, old position, velocty, and force for verlet integration
+// stores position, old position, velocity, and force for Verlet integration
 // stores mass, rho, rho_near, pressure, pressure_near, sigma, and beta values for SPH
 // stores list of neighboring particles for quick access in multiple simulation steps
 struct Particle {
 	Particle(float _x, float _y) : x(_x,_y), x0(_x,_y), sigma(SIGMA), beta(BETA) {}
 	Particle() {}
 	Vector2d x, x0, v, f;
-	float mass, rho, rho_near, press, press_near, sigma, beta;
+	float mass, rho, rho_near, p, p_near, sigma, beta;
 	vector<Neighbor> neighbors;
 };
 
@@ -60,10 +61,6 @@ const static int WINDOW_WIDTH = 1280;
 const static int WINDOW_HEIGHT = 800;
 const static double VIEW_WIDTH = 100.0f;
 const static double VIEW_HEIGHT = WINDOW_HEIGHT*VIEW_WIDTH/WINDOW_WIDTH;
-
-// LVSTODO: cleanup these...
-float rand01() { return (float)rand() * (1.f / RAND_MAX); }
-float randab(float a, float b) { return a + (b-a)*rand01(); }
 
 void InitSPH(void)
 {
@@ -97,15 +94,10 @@ void Render(void)
 	glutSwapBuffers();
 }
 
-void Update(void)
+// Verlet integration
+// spring boundary handling and sanity check
+void Integrate(void)
 {
-	// UPDATE
-	//
-	// This modified verlet integrator has dt = 1 and calculates the velocity
-	// For later use in the simulation.
-    
-	// verlet integration
-	// with spring boundary handling and sanity check
 	for(auto &p : particles)
 	{
 		// for simplicity, dt=1 assumed in integration
@@ -131,138 +123,115 @@ void Update(void)
 		if(p.x(1)+eps > VIEW_HEIGHT)
 			p.f(1) -= (p.x(1)+eps - VIEW_HEIGHT) * SPRING_CONST;
 	}
-    
-    // LVSTODO: better description
-	// Calculate the density by basically making a weighted sum
-	// of the distances of neighboring particles within the radius of support (r)
-	for(int i = 0; i < particles.size(); ++i)
+}
+
+// LVSTODO: better description
+// Calculate the density by basically making a weighted sum
+// of the distances of neighboring particles within the radius of support (r)
+void DensityStep(void)
+{
+	for(int i = 0; i < particles.size(); i++)
 	{
-		Particle &p = particles[i];
-		p.rho = p.rho_near = 0;
+		Particle &pi = particles[i];
+		pi.rho = pi.rho_near = 0;
         
 		// We will sum up the 'near' and 'far' densities.
-		float d=0, dn=0;
+		float d = 0.f, dn = 0.f;
         
 		// Now look at every other particle
-		p.neighbors.clear();
-        unsigned long particles_size = particles.size();
-		for(int j = i + 1; j < particles_size; ++j)
+		pi.neighbors.clear();
+		for(int j = i + 1; j < particles.size(); j++)
 		{
-			// The vector seperating the two particles
-			Vector2d rij = particles[j].x - p.x;
-            
-			// Along with the squared distance between
+			Particle &pj = particles[j];
+
+			Vector2d rij = pj.x - pi.x;
 			float rij_len2 = rij.squaredNorm();
-            
-			// If they're within the radius of support ...
 			if(rij_len2 < rsq)
 			{
-				// Get the actual distance from the squared distance.
 				float rij_len = sqrt(rij_len2);
                 
-				// And calculated the weighted distance values
-				float q = 1 - rij_len / r;
+                // weighted distance
+				float q = 1.f - rij_len / r;
 				float q2 = q*q;
 				float q3 = q2*q;
                 
 				d += q2;
 				dn += q3;
                 
-				// Accumulate on the neighbor
-				particles[j].rho += q2;
-				particles[j].rho_near += q3;
+				pj.rho += q2;
+				pj.rho_near += q3;
                 
-				// Set up the neighbor list for faster access later.
+				// add to neighbor list for faster access later
 				Neighbor n;
 				n.j = j;
-				n.q = q; n.q2 = q2;
-				particles[i].neighbors.push_back(n);
+				n.q = q; 
+				n.q2 = q2;
+				pi.neighbors.push_back(n);
 			}
 		}
         
-		particles[i].rho        += d;
-		particles[i].rho_near   += dn;
+		pi.rho += d;
+		pi.rho_near += dn;
 	}
-    
-	// PRESSURE
-	//
-	// Make the simple pressure calculation from the equation of state.
-	for(int i=0; i < particles.size(); ++i)
+}
+
+void PressureAndViscosity(void)
+{
+	// pressure
+	for(auto &pi : particles)
 	{
-		particles[i].press = k * (particles[i].rho - rest_density);
-		particles[i].press_near = k_near * particles[i].rho_near;
-	}
-    
-	// PRESSURE FORCE
-	//
-	// We will force particles in or out from their neighbors
-	// based on their difference from the rest density.
-    
-	// For each particle ...
-	for(int i=0; i < particles.size(); ++i)
-	{
+		pi.p = k * (pi.rho - rest_density);
+		pi.p_near = k_near * pi.rho_near;
+
 		Vector2d dX = Vector2d(0,0);
-        
-		// For each of the neighbors
-		unsigned long ncount = particles[i].neighbors.size();
-		for(int ni=0; ni < ncount; ++ni)
+		for(auto &n : pi.neighbors)
 		{
-			Neighbor n = particles[i].neighbors[ni];
-			int j = n.j;
-			float q(n.q);
-			float q2(n.q2);
+			Particle &pj = particles[n.j];
+
+			Vector2d rij = pj.x - pi.x;
+			float dm = (pi.p + pi.p) * n.q + (pi.p_near + pj.p_near) * n.q2;
             
-			// The vector from particle i to particle j
-			Vector2d rij = particles[j].x - particles[i].x;
-            
-			// calculate the force from the pressures calculated above
-			float dm = (particles[i].press + particles[j].press) * q +
-            (particles[i].press_near + particles[j].press_near) * q2;
-            
-			// Get the direction of the force
 			Vector2d D = rij.normalized() * dm;
 			dX += D;
-			particles[j].f += D;
+			pj.f += D;
 		}
-        
-		particles[i].f -= dX;
+		pi.f -= dX;
 	}
     
-	// VISCOSITY
-	//
-	// This simulation actually may look okay if you don't compute
-	// the viscosity section. The effects of numerical damping and
-	// surface tension will give a smooth appearance on their own.
-	// Try it.
-    
-	// For each particle
-	for(int i=0; i < particles.size(); ++i)
+	// viscosity
+	for(auto &pi : particles)
 	{
-		// For each of that particles neighbors
-		for(int ni=0; ni < particles[i].neighbors.size(); ++ni)
+		for(auto &n : pi.neighbors)
 		{
-			Neighbor n = particles[i].neighbors[ni];
-            
-			Vector2d rij = particles[n.j].x - particles[i].x;
+			Particle &pj = particles[n.j];   
+
+			Vector2d rij = pj.x - pi.x;
 			float l = (rij).norm();
 			float q = l / r;
             
 			Vector2d rijn = (rij / l);
 			// Get the projection of the velocities onto the vector between them.
-			float u = (particles[i].v - particles[n.j].v).dot(rijn);
-			if(u > 0)
+			float u = (pi.v - pj.v).dot(rijn);
+			if(u > 0.f)
 			{
 				// Calculate the viscosity impulse between the two particles
 				// based on the quadratic function of projected length.
-				Vector2d I = (1 - q) * (particles[n.j].sigma * u + particles[n.j].beta * u*u) * rijn;
+				Vector2d I = (1.f - q) * (pj.sigma * u + pj.beta * u*u) * rijn;
                 
 				// Apply the impulses on the two particles
-				particles[i].v -= I * 0.5f;
-				particles[n.j].v += I * 0.5f;
+				pi.v -= I * 0.5f;
+				pj.v += I * 0.5f;
 			}
             
 		}
 	}
+}
+
+void Update(void)
+{ 
+ 	Integrate();
+ 	DensityStep();
+    PressureAndViscosity();
 
 	glutPostRedisplay();
 }
