@@ -24,12 +24,13 @@ const static float k_near = k*10.f; // near pressure weight
 const static float rest_density = 3.f;	// rest density
 const static float r = spacing*1.25f; // kernel radius
 const static float rsq = r*r; // radius^2 for optimization
-const static float eps = 1.0f; // boundary epsilon
-
 const static float SIGMA = 0.2f; // visc parameters
 const static float BETA = 0.2;
 
-const static float SPRING_CONST = 1./8;
+const static float eps = 1.0f; // boundary epsilon
+const static float SPRING_CONST = 1./8.;
+const static float MAX_VEL = 2.f; // velocity limit for stability
+const static float MAX_VEL_SQ = MAX_VEL*MAX_VEL;
 
 // neighbor data structure
 // stores index of neighbor particles along with dist and squared dist to particle
@@ -90,7 +91,7 @@ void Render(void)
 	glColor4f(0.2f, 0.6f, 1.0f, 1);
 	glBegin(GL_POINTS);
 	for(auto &p : particles)
-		glVertex2f(p.pos(0), p.pos(1));
+		glVertex2f(p.x(0), p.x(1));
 	glEnd();
 
 	glutSwapBuffers();
@@ -116,6 +117,10 @@ void Update(void)
 		p.f = G;
 		p.v = p.x - p.x0;
 
+		// if the velocity is greater than the max velocity, then cut it in half
+		if(p.v.squaredNorm() > MAX_VEL_SQ)
+			p.v = p.v * .5f;
+
 		// enforce boundary condition
 		if(p.x(0)-eps < 0.0f)
 			p.f(0) -= (p.x(0)-eps) * SPRING_CONST;
@@ -126,67 +131,25 @@ void Update(void)
 		if(p.x(1)+eps > VIEW_HEIGHT)
 			p.f(1) -= (p.x(1)+eps - VIEW_HEIGHT) * SPRING_CONST;
 	}
-
-	/*
-	// For each particles i ...
-    for(int i=0; i < particles.size(); ++i)
-	{
-		// Normal verlet stuff
-		p.x_old = p.x;
-		p.x += particles[i].vel;
-        
-		// Apply the currently accumulated forces
-		p.x += p.f;
-        
-		// Restart the forces with gravity only. We'll add the rest later.
-		p.f = G;
-        
-		// Calculate the velocity for later.
-		particles[i].vel = p.x - p.x_old;
-        
-		// If the velocity is really high, we're going to cheat and cap it.
-		// This will not damp all motion. It's not physically-based at all. Just
-		// a little bit of a hack.
-		float max_vel = 2.f;
-		float vel_mag = particles[i].vel.squaredNorm();
-		// If the velocity is greater than the max velocity, then cut it in half.
-		if(vel_mag > max_vel*max_vel)
-			particles[i].vel = particles[i].vel * .5f;
-        
-		// If the particle is outside the bounds of the world, then
-		// Make a little spring force to push it back in.
-		if(p.x(0)-eps < 0.0f) p.f(0) -= (p.x(0)-eps - 0.0f) / 8;
-		if(p.x(0)+eps >  VIEW_WIDTH) p.f(0) -= (p.x(0)+eps - VIEW_WIDTH) / 8;
-		if(p.x(1)-eps < 0.0f) p.f(1) -= (p.x(1)-eps - 0.0f) / 8;
-		if(p.x(1)+eps > VIEW_HEIGHT)p.f(1) -= (p.x(1)+eps - VIEW_HEIGHT) / 8;
-        
-        
-		// Reset the nessecary items.
-		particles[i].rho = particles[i].rho_near = 0;
-		particles[i].neighbors.clear();
-	}
-	*/
     
-	// DENSITY
-	//
+    // LVSTODO: better description
 	// Calculate the density by basically making a weighted sum
 	// of the distances of neighboring particles within the radius of support (r)
-    
-	// For each particle ...
-	for(int i=0; i < particles.size(); ++i)
+	for(int i = 0; i < particles.size(); ++i)
 	{
-		particles[i].rho = particles[i].rho_near = 0;
+		Particle &p = particles[i];
+		p.rho = p.rho_near = 0;
         
 		// We will sum up the 'near' and 'far' densities.
 		float d=0, dn=0;
         
 		// Now look at every other particle
-		particles[i].neighbors.clear();
+		p.neighbors.clear();
         unsigned long particles_size = particles.size();
 		for(int j = i + 1; j < particles_size; ++j)
 		{
 			// The vector seperating the two particles
-			Vector2d rij = particles[j].pos - p.x;
+			Vector2d rij = particles[j].x - p.x;
             
 			// Along with the squared distance between
 			float rij_len2 = rij.squaredNorm();
@@ -250,7 +213,7 @@ void Update(void)
 			float q2(n.q2);
             
 			// The vector from particle i to particle j
-			Vector2d rij = particles[j].pos - p.x;
+			Vector2d rij = particles[j].x - particles[i].x;
             
 			// calculate the force from the pressures calculated above
 			float dm = (particles[i].press + particles[j].press) * q +
@@ -259,10 +222,10 @@ void Update(void)
 			// Get the direction of the force
 			Vector2d D = rij.normalized() * dm;
 			dX += D;
-			particles[j].force += D;
+			particles[j].f += D;
 		}
         
-		p.f -= dX;
+		particles[i].f -= dX;
 	}
     
 	// VISCOSITY
@@ -280,13 +243,13 @@ void Update(void)
 		{
 			Neighbor n = particles[i].neighbors[ni];
             
-			Vector2d rij = particles[n.j].pos - p.x;
+			Vector2d rij = particles[n.j].x - particles[i].x;
 			float l = (rij).norm();
 			float q = l / r;
             
 			Vector2d rijn = (rij / l);
 			// Get the projection of the velocities onto the vector between them.
-			float u = (particles[i].vel - particles[n.j].vel).dot(rijn);
+			float u = (particles[i].v - particles[n.j].v).dot(rijn);
 			if(u > 0)
 			{
 				// Calculate the viscosity impulse between the two particles
@@ -294,8 +257,8 @@ void Update(void)
 				Vector2d I = (1 - q) * (particles[n.j].sigma * u + particles[n.j].beta * u*u) * rijn;
                 
 				// Apply the impulses on the two particles
-				particles[i].vel -= I * 0.5f;
-				particles[n.j].vel += I * 0.5f;
+				particles[i].v -= I * 0.5f;
+				particles[n.j].v += I * 0.5f;
 			}
             
 		}
@@ -309,11 +272,15 @@ void Keyboard(unsigned char c, __attribute__((unused)) int x, __attribute__((unu
 	switch(c)
 	{
 	case ' ':
+	/*
+		// LVSTODO: something reasonable...
 		if(particles.size() >= MAX_PARTICLES)
-	        break;
+	    ;//    break;
 		for(float y = VIEW_HEIGHT/2; y < VIEW_HEIGHT-eps; y += r*0.5f)
-			for(float x = eps; x <= VIEW_WIDTH/4; x += r*0.5f)
+			for(float x = VIEW_WIDTH/2-VIEW_WIDTH/4; x <= VIEW_WIDTH/2+VIEW_WIDTH/4; x += r*0.5f)
 				particles.push_back(Particle(x,y));
+	*/
+		break;
 	}
 }
 
