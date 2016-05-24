@@ -11,44 +11,37 @@ using namespace std;
 #include <eigen3/Eigen/Dense>
 using namespace Eigen;
 
-// "Particle-based Viscoelastic Fluid Simluation"
+// "Particle-Based Fluid Simulation for Interactive Applications"
 // solver parameters
-const static Vector2d G(0.f, -.02f * .25f); // external (gravitational) forces
-const static float spacing = 2.f; // particle spacing/radius
-const static float k = spacing / 1000.f; // far pressure weight
-const static float k_near = k*10.f; // near pressure weight
-const static float rest_density = 3.f;	// rest density
-const static float r = spacing*1.25f; // kernel radius
-const static float rsq = r*r; // radius^2 for optimization
-const static float SIGMA = 0.2f; // visc parameters
-const static float BETA = 0.2f;
+const static Vector2d G(0.f, -10.f); // external (gravitational) forces
+const static float REST_DENS = 1.f; // rest density
+const static float GAS_CONST = 1.f; // const for equation of state
+const static float H = 1.5f; // kernel radius
+const static float HSQ = H*H; // radius^2 for optimization
+const static float MASS = 0.02f; // assume all particles have the same mass
+const static float VISC = 6.5f; // viscosity constant
+const static float DT = 0.001f; // integration timestep
+
+// smoothing kernels defined in Müller and their gradients
+const static float POLY6 = 315.f/(65.f*M_PI*pow(H, 9.f));
+const static float SPIKY_GRAD = -45.f/(M_PI*pow(H, 6.f));
+const static float VISC_LAP = 45.f/(M_PI*pow(H, 6.f));
 
 // simulation parameters
 const static float EPS = 1.0f; // boundary epsilon
-const static float SPRING_CONST = 1./8.;
-const static float MAX_VEL = 2.f; // velocity limit for stability
-const static float MAX_VEL_SQ = MAX_VEL*MAX_VEL;
-
-// neighbor data structure
-// stores index of neighbor particles along with dist and squared dist to particle
-struct Neighbor { 
-	int j;
-	float q, q2;
-};
+const static float BOUND_DAMPING = -0.5f;
 
 // particle data structure
-// stores position, old position, velocity, and force for Verlet integration
-// stores mass, rho, rho_near, pressure, pressure_near, sigma, and beta values for SPH
-// stores list of neighboring particles for quick access in multiple simulation steps
+// stores position, velocity, and force for integration
+// stores density (rho) and presure values for SPH
 struct Particle {
-	Particle(float _x, float _y) : x(_x,_y), x0(_x,_y), v(0.f,0.f), f(0.f,0.f), rho(0.f), rho_near(0.f), p(0.f), p_near(0.f) {}
-	Vector2d x, x0, v, f;
-	float mass, rho, rho_near, p, p_near;
-	vector<Neighbor> neighbors;
+	Particle(float _x, float _y) : x(_x,_y), v(0.f,0.f), f(0.f,0.f), rho(0.f), p(0.f) {}
+	Vector2d x, v, f;
+	float rho, p;
 };
 
 // solver data
-const static int MAX_PARTICLES = 1000;
+const static int MAX_PARTICLES = 5;
 static vector<Particle> particles;
 
 // rendering projection parameters
@@ -59,9 +52,110 @@ const static double VIEW_HEIGHT = WINDOW_HEIGHT*VIEW_WIDTH/WINDOW_WIDTH;
 
 void InitSPH(void)
 {
-	for(float y = EPS; y < VIEW_HEIGHT-EPS; y += r*0.5f)
-		for(float x = EPS; x <= VIEW_WIDTH/2; x += r*0.5f)
-			particles.push_back(Particle(x,y));
+	for(float y = EPS+2.f; y < VIEW_HEIGHT-EPS; y += H*0.5f)
+		for(float x = EPS+2.f; x <= VIEW_WIDTH/2; x += H*0.5f)
+			if(particles.size() < MAX_PARTICLES)
+				particles.push_back(Particle(x,y));
+}
+
+void Integrate(void)
+{
+	for(auto &p : particles)
+	{
+		// forward euler
+		p.v += DT*p.f/p.rho;
+		p.x += DT*p.v;
+
+		// enforce boundary conditions
+		if(p.x(0)-EPS < 0.0f)
+		{
+			p.v(0) *= BOUND_DAMPING;
+			p.x(0) = EPS;
+		}
+		if(p.x(0)+EPS > VIEW_WIDTH) 
+		{
+			p.v(0) *= BOUND_DAMPING;
+			p.x(0) = VIEW_WIDTH-EPS;
+		}
+		if(p.x(1)-EPS < 0.0f)
+		{
+			p.v(1) *= BOUND_DAMPING;
+			p.x(1) = EPS;
+		}
+		if(p.x(1)+EPS > VIEW_HEIGHT)
+		{
+			p.v(1) *= BOUND_DAMPING;
+			p.x(1) = VIEW_HEIGHT-EPS;
+		}
+	}
+}
+
+void ComputeDensityPressure(void)
+{
+	for(auto &pi : particles)
+	{
+		pi.rho = 0.f;
+		for(auto &pj : particles)
+		{
+			if(&pi == &pj) break;
+
+			float r2 = (pj.x - pi.x).squaredNorm();
+			if(r2 < HSQ)
+			{
+				// this computation is symmetric
+				pi.rho += MASS*POLY6*pow(HSQ-r2, 3.f);
+			}
+		}
+		//pi.p = GAS_CONST*(pi.rho - REST_DENS);
+		pi.p = GAS_CONST*(pow(pi.rho/REST_DENS,3.f)-1.f);
+		//std::cout << "DENSITY" << std::endl;
+		//std::cout << pi.rho << std::endl;
+		//std::cout << pi.p << std::endl;
+	}
+}
+
+void ComputeForces(void)
+{
+	// pressure
+	for(auto &pi : particles)
+	{
+		Vector2d fpress(0.f, 0.f);
+		Vector2d fvisc(0.f, 0.f);
+		Vector2d fgrav(0.f, 0.f);
+		for(auto &pj : particles)
+		{
+			if(&pi == &pj) break;
+
+			float r = (pj.x - pi.x).norm();
+			if(r < H)
+			{
+				// pressure
+				fpress += -(pj.x - pi.x).normalized()*MASS*(pi.p + pj.p)/(2.f * pj.rho) * SPIKY_GRAD*pow(H-r,2.f);
+				// visc
+				fvisc += VISC*MASS*(pj.v - pi.v)/pj.rho * VISC_LAP*(H-r);
+			}
+		}
+		std::cout << "FORCES" << std::endl;
+		std::cout << fpress << std::endl;
+		std::cout << fvisc << std::endl;
+		fgrav = G * pi.rho;
+		pi.f = fpress + fvisc + fgrav;
+		std::cout << pi.f << std::endl;
+	}
+}
+
+static bool once = false;
+void Update(void)
+{ 
+	if(!once)
+	{
+ 		ComputeDensityPressure();
+   	 	ComputeForces();
+   	 	Integrate();
+   	 	once = false;
+	}
+
+	glutPostRedisplay();
 }
 
 void InitGL(void)
@@ -79,7 +173,6 @@ void Render(void)
 	glLoadIdentity();
 	glOrtho(0, VIEW_WIDTH, 0, VIEW_HEIGHT, 0, 1);
 
-
 	glColor4f(0.2f, 0.6f, 1.0f, 1);
 	glBegin(GL_POINTS);
 	for(auto &p : particles)
@@ -87,148 +180,6 @@ void Render(void)
 	glEnd();
 
 	glutSwapBuffers();
-}
-
-// Verlet integration
-// spring boundary handling and sanity check
-void Integrate(void)
-{
-	for(auto &p : particles)
-	{
-		// for simplicity, dt=1 assumed in integration
-		p.x0 = p.x;
-		p.x += p.v;
-		p.x += p.f;
-
-		// apply external forces
-		p.f = G;
-		p.v = p.x - p.x0;
-
-		// if the velocity is greater than the max velocity, then cut it in half
-		if(p.v.squaredNorm() > MAX_VEL_SQ)
-			p.v = p.v * .5f;
-
-		// enforce boundary condition
-		if(p.x(0)-EPS < 0.0f)
-			p.f(0) -= (p.x(0)-EPS) * SPRING_CONST;
-		if(p.x(0)+EPS > VIEW_WIDTH) 
-			p.f(0) -= (p.x(0)+EPS - VIEW_WIDTH) * SPRING_CONST;
-		if(p.x(1)-EPS < 0.0f)
-			p.f(1) -= (p.x(1)-EPS) * SPRING_CONST;
-		if(p.x(1)+EPS > VIEW_HEIGHT)
-			p.f(1) -= (p.x(1)+EPS - VIEW_HEIGHT) * SPRING_CONST;
-	}
-}
-
-// LVSTODO: better description
-// Calculate the density by basically making a weighted sum
-// of the distances of neighboring particles within the radius of support (r)
-void DensityStep(void)
-{
-	for(int i = 0; i < particles.size(); i++)
-	{
-		Particle &pi = particles[i];
-		pi.rho = pi.rho_near = 0;
-        
-		// We will sum up the 'near' and 'far' densities.
-		float d = 0.f, dn = 0.f;
-        
-		// Now look at every other particle
-		pi.neighbors.clear();
-		for(int j = i + 1; j < particles.size(); j++)
-		{
-			Particle &pj = particles[j];
-
-			Vector2d rij = pj.x - pi.x;
-			float rij_len2 = rij.squaredNorm();
-			if(rij_len2 < rsq)
-			{
-				float rij_len = sqrt(rij_len2);
-                
-                // weighted distance
-				float q = 1.f - rij_len / r;
-				float q2 = q*q;
-				float q3 = q2*q;
-                
-				d += q2;
-				dn += q3;
-                
-				pj.rho += q2;
-				pj.rho_near += q3;
-                
-				// add to neighbor list for faster access later
-				Neighbor n;
-				n.j = j;
-				n.q = q; 
-				n.q2 = q2;
-				pi.neighbors.push_back(n);
-			}
-		}
-        
-		pi.rho += d;
-		pi.rho_near += dn;
-	}
-}
-
-void PressureAndViscosity(void)
-{
-	// pressure
-	for(auto &pi : particles)
-	{
-		pi.p = k * (pi.rho - rest_density);
-		pi.p_near = k_near * pi.rho_near;
-
-		Vector2d dX = Vector2d(0,0);
-		for(auto &n : pi.neighbors)
-		{
-			Particle &pj = particles[n.j];
-
-			Vector2d rij = pj.x - pi.x;
-			float dm = (pi.p + pi.p) * n.q + (pi.p_near + pj.p_near) * n.q2;
-            
-			Vector2d D = rij.normalized() * dm;
-			dX += D;
-			pj.f += D;
-		}
-		pi.f -= dX;
-	}
-    
-	// viscosity
-	for(auto &pi : particles)
-	{
-		for(auto &n : pi.neighbors)
-		{
-			Particle &pj = particles[n.j];   
-
-			Vector2d rij = pj.x - pi.x;
-			float l = (rij).norm();
-			float q = l / r;
-            
-			Vector2d rijn = (rij / l);
-			// Get the projection of the velocities onto the vector between them.
-			float u = (pi.v - pj.v).dot(rijn);
-			if(u > 0.f)
-			{
-				// Calculate the viscosity impulse between the two particles
-				// based on the quadratic function of projected length.
-				Vector2d I = (1.f - q) * (SIGMA * u + BETA * u*u) * rijn;
-                
-				// Apply the impulses on the two particles
-				pi.v -= I * 0.5f;
-				pj.v += I * 0.5f;
-			}
-            
-		}
-	}
-}
-
-void Update(void)
-{ 
- 	Integrate();
- 	DensityStep();
-    PressureAndViscosity();
-
-	glutPostRedisplay();
 }
 
 void Keyboard(unsigned char c, __attribute__((unused)) int x, __attribute__((unused)) int y)
@@ -239,8 +190,8 @@ void Keyboard(unsigned char c, __attribute__((unused)) int x, __attribute__((unu
 		if(particles.size() >= MAX_PARTICLES)
 			std::cout << "maximum number of particles reached" << std::endl;
 		else
-			for(float y = VIEW_HEIGHT/1.5f-VIEW_HEIGHT/5.f; y < VIEW_HEIGHT/1.5f+VIEW_HEIGHT/5.f; y += r*0.5f)
-				for(float x = VIEW_WIDTH/2.f-VIEW_HEIGHT/5.f; x <= VIEW_WIDTH/2.f+VIEW_HEIGHT/5.f; x += r*0.5f)
+			for(float y = VIEW_HEIGHT/1.5f-VIEW_HEIGHT/5.f; y < VIEW_HEIGHT/1.5f+VIEW_HEIGHT/5.f; y += H*0.5f)
+				for(float x = VIEW_WIDTH/2.f-VIEW_HEIGHT/5.f; x <= VIEW_WIDTH/2.f+VIEW_HEIGHT/5.f; x += H*0.5f)
 					particles.push_back(Particle(x,y));
 		break;
 	}
