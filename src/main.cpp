@@ -15,7 +15,7 @@ using namespace Eigen;
 // solver parameters
 const static Vector2d G(0.f, 12000*-9.8f); // external (gravitational) forces
 const static float REST_DENS = 1000.f; // rest density
-const static float GAS_CONST = 4000.f; // const for equation of state
+const static float GAS_CONST = 3000.f; // const for equation of state
 const static float H = 16.f; // kernel radius
 const static float HSQ = H*H; // radius^2 for optimization
 const static float MASS = 65.f; // assume all particles have the same mass
