@@ -19,7 +19,7 @@ const static float GAS_CONST = 2000.f; // const for equation of state
 const static float H = 16.f; // kernel radius
 const static float HSQ = H*H; // radius^2 for optimization
 const static float MASS = 65.f; // assume all particles have the same mass
-const static float VISC = 450.f; // viscosity constant
+const static float VISC = 250.f; // viscosity constant
 const static float DT = 0.0008f; // integration timestep
 
 // smoothing kernels defined in Müller and their gradients
