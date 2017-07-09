@@ -15,12 +15,12 @@ using namespace Eigen;
 // solver parameters
 const static Vector2d G(0.f, 12000*-9.8f); // external (gravitational) forces
 const static float REST_DENS = 1000.f; // rest density
-const static float GAS_CONST = 3000.f; // const for equation of state
+const static float GAS_CONST = 2000.f; // const for equation of state
 const static float H = 16.f; // kernel radius
 const static float HSQ = H*H; // radius^2 for optimization
 const static float MASS = 65.f; // assume all particles have the same mass
 const static float VISC = 450.f; // viscosity constant
-const static float DT = 0.0007f; // integration timestep
+const static float DT = 0.0008f; // integration timestep
 
 // smoothing kernels defined in Müller and their gradients
 const static float POLY6 = 315.f/(65.f*M_PI*pow(H, 9.f));
