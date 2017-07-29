@@ -22,7 +22,7 @@ CC = g++
 LD = g++
 CFLAGS = -std=c++11 -O3 -Wall -Wno-deprecated -pedantic -Wno-vla-extension $(INCLUDE_PATH) -I./include -I./src -DNDEBUG
 LFLAGS = -std=c++11 -O3 -Wall -Wno-deprecated -Werror -pedantic $(LIBRARY_PATH) -DNDEBUG
-LIBS = $(OPENGL_LIBS) $(SUITESPARSE_LIBS) $(BLAS_LIBS)
+LIBS = $(OPENGL_LIBS)
 
 OBJS = obj/main.o
 
