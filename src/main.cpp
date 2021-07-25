@@ -11,21 +11,22 @@ using namespace std;
 #include <eigen3/Eigen/Dense>
 using namespace Eigen;
 
-// "Particle-Based Fluid Simulation for Interactive Applications"
+// "Particle-Based Fluid Simulation for Interactive Applications" by Müller et al.
 // solver parameters
-const static Vector2d G(0.f, 12000 * -9.8f); // external (gravitational) forces
-const static float REST_DENS = 1000.f;		 // rest density
-const static float GAS_CONST = 2000.f;		 // const for equation of state
-const static float H = 16.f;				 // kernel radius
-const static float HSQ = H * H;				 // radius^2 for optimization
-const static float MASS = 65.f;				 // assume all particles have the same mass
-const static float VISC = 250.f;			 // viscosity constant
-const static float DT = 0.0008f;			 // integration timestep
+const static Vector2d G(0.f, -10.f);   // external (gravitational) forces
+const static float REST_DENS = 300.f;  // rest density
+const static float GAS_CONST = 2000.f; // const for equation of state
+const static float H = 16.f;		   // kernel radius
+const static float HSQ = H * H;		   // radius^2 for optimization
+const static float MASS = 2.5f;		   // assume all particles have the same mass
+const static float VISC = 200.f;	   // viscosity constant
+const static float DT = 0.0007f;	   // integration timestep
 
 // smoothing kernels defined in Müller and their gradients
-const static float POLY6 = 315.f / (65.f * M_PI * pow(H, 9.f));
-const static float SPIKY_GRAD = -45.f / (M_PI * pow(H, 6.f));
-const static float VISC_LAP = 45.f / (M_PI * pow(H, 6.f));
+// adapted to 2D per "SPH Based Shallow Water Simulation" by Solenthaler et al.
+const static float POLY6 = 4.f / (M_PI * pow(H, 8.f));
+const static float SPIKY_GRAD = -10.f / (M_PI * pow(H, 5.f));
+const static float VISC_LAP = 40.f / (M_PI * pow(H, 5.f));
 
 // simulation parameters
 const static float EPS = H; // boundary epsilon
@@ -59,12 +60,20 @@ void InitSPH(void)
 {
 	cout << "initializing dam break with " << DAM_PARTICLES << " particles" << endl;
 	for (float y = EPS; y < VIEW_HEIGHT - EPS * 2.f; y += H)
+	{
 		for (float x = VIEW_WIDTH / 4; x <= VIEW_WIDTH / 2; x += H)
+		{
 			if (particles.size() < DAM_PARTICLES)
 			{
 				float jitter = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
 				particles.push_back(Particle(x + jitter, y));
 			}
+			else
+			{
+				return;
+			}
+		}
+	}
 }
 
 void Integrate(void)
@@ -76,7 +85,7 @@ void Integrate(void)
 		p.x += DT * p.v;
 
 		// enforce boundary conditions
-		if (p.x(0) - EPS < 0.0f)
+		if (p.x(0) - EPS < 0.f)
 		{
 			p.v(0) *= BOUND_DAMPING;
 			p.x(0) = EPS;
@@ -86,7 +95,7 @@ void Integrate(void)
 			p.v(0) *= BOUND_DAMPING;
 			p.x(0) = VIEW_WIDTH - EPS;
 		}
-		if (p.x(1) - EPS < 0.0f)
+		if (p.x(1) - EPS < 0.f)
 		{
 			p.v(1) *= BOUND_DAMPING;
 			p.x(1) = EPS;
@@ -128,7 +137,9 @@ void ComputeForces(void)
 		for (auto &pj : particles)
 		{
 			if (&pi == &pj)
+			{
 				continue;
+			}
 
 			Vector2d rij = pj.x - pi.x;
 			float r = rij.norm();
@@ -136,12 +147,12 @@ void ComputeForces(void)
 			if (r < H)
 			{
 				// compute pressure force contribution
-				fpress += -rij.normalized() * MASS * (pi.p + pj.p) / (2.f * pj.rho) * SPIKY_GRAD * pow(H - r, 2.f);
+				fpress += -rij.normalized() * MASS * (pi.p + pj.p) / (2.f * pj.rho) * SPIKY_GRAD * pow(H - r, 3.f);
 				// compute viscosity force contribution
 				fvisc += VISC * MASS * (pj.v - pi.v) / pj.rho * VISC_LAP * (H - r);
 			}
 		}
-		Vector2d fgrav = G * pi.rho;
+		Vector2d fgrav = G * MASS / pi.rho;
 		pi.f = fpress + fvisc + fgrav;
 	}
 }
@@ -170,10 +181,12 @@ void Render(void)
 	glLoadIdentity();
 	glOrtho(0, VIEW_WIDTH, 0, VIEW_HEIGHT, 0, 1);
 
-	glColor4f(0.2f, 0.6f, 1.0f, 1);
+	glColor4f(0.2f, 0.6f, 1.f, 1);
 	glBegin(GL_POINTS);
 	for (auto &p : particles)
+	{
 		glVertex2f(p.x(0), p.x(1));
+	}
 	glEnd();
 
 	glutSwapBuffers();
@@ -185,14 +198,22 @@ void Keyboard(unsigned char c, __attribute__((unused)) int x, __attribute__((unu
 	{
 	case ' ':
 		if (particles.size() >= MAX_PARTICLES)
+		{
 			std::cout << "maximum number of particles reached" << std::endl;
+		}
 		else
 		{
 			unsigned int placed = 0;
 			for (float y = VIEW_HEIGHT / 1.5f - VIEW_HEIGHT / 5.f; y < VIEW_HEIGHT / 1.5f + VIEW_HEIGHT / 5.f; y += H * 0.95f)
+			{
 				for (float x = VIEW_WIDTH / 2.f - VIEW_HEIGHT / 5.f; x <= VIEW_WIDTH / 2.f + VIEW_HEIGHT / 5.f; x += H * 0.95f)
+				{
 					if (placed++ < BLOCK_PARTICLES && particles.size() < MAX_PARTICLES)
+					{
 						particles.push_back(Particle(x, y));
+					}
+				}
+			}
 		}
 		break;
 	case 'r':
