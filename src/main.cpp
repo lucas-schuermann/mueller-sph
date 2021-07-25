@@ -227,6 +227,7 @@ void Keyboard(unsigned char c, __attribute__((unused)) int x, __attribute__((unu
 int main(int argc, char **argv)
 {
 	glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
+	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
 	glutInit(&argc, argv);
 	glutCreateWindow("Müller SPH");
 	glutDisplayFunc(Render);
