@@ -1,7 +1,7 @@
 #######################################################################################################
 
 # Mac OS X
-INCLUDE_PATH      = -I/usr/local/include/ -I/usr/local/include/eigen3/
+INCLUDE_PATH      = -I/usr/local/include/
 LIBRARY_PATH      = -L/usr/local/lib/
 OPENGL_LIBS       = -framework OpenGL -framework GLUT
 
