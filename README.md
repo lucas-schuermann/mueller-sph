@@ -1,9 +1,6 @@
 # mueller-sph
-A concise 2D implementation of Müller's interactive smoothed particle hydrodynamics (SPH) paper in C++
+A concise 2D implementation of Müller's "Particle-Based Fluid Simulation for Interactive Applications" (SPH) [paper](https://matthias-research.github.io/pages/publications/sca03.pdf) in C++
 
-Please see the accompanying writeup [here](https://lucasschuermann.com/writing/implementing-sph-in-2d)
+See [here](https://github.com/cerrno/mueller-sph-rs) for a more recent implementation in Rust including a parallel solver
 
-See [here](https://github.com/cerrno/mueller-sph-rs) for a more recent implementation in Rust
-
-## License
-[MIT](https://lucasschuermann.com/license.txt)
+Please see the accompanying [tutorial](https://lucasschuermann.com/writing/implementing-sph-in-2d) for more information.
