@@ -1,3 +1,4 @@
+#define GL_SILENCE_DEPRECATION
 #if __APPLE__
 #include <GLUT/glut.h>
 #else
@@ -65,7 +66,7 @@ void InitSPH(void)
 		{
 			if (particles.size() < DAM_PARTICLES)
 			{
-				float jitter = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+				float jitter = static_cast<float>(arc4random()) / static_cast<float>(RAND_MAX);
 				particles.push_back(Particle(x + jitter, y));
 			}
 			else
